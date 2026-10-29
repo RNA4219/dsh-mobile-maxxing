@@ -9875,7 +9875,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       const collapse = visibleCollapseButton();
-      if (collapse !== null) {
+      if (collapse !== null && document.documentElement.hasAttribute("data-rdsh-rightpanel-open")) {
         collapse.click();
         return;
       }
@@ -9890,8 +9890,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const workspace = optionalService("uiWorkspace");
       const layout = optionalService("layout");
       const sessionId = workspace?.selection?.getSnapshot?.()?.sessionId ?? shownSessionId();
+      const blank = optionalService("sessions")?.list?.getSnapshot?.()?.byId?.[sessionId]?.blank === true;
       const panelId = layout?.panelInfo?.getSnapshot?.()?.activePanelId;
-      if (sessionId || panelId != null) {
+      if ((sessionId && !blank) || panelId != null) {
         if (typeof workspace?.clearMain === "function") {
           wantedSession = "";
           wantedUntil = 0;

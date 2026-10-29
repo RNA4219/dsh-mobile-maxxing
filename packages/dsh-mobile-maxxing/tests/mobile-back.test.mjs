@@ -69,7 +69,7 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
     document: doc, Element: Node,
     navigator: { userAgent: ios ? "iPhone" : "Android", platform: ios ? "iPhone" : "Linux", maxTouchPoints: 5 },
     phone: () => mobile,
-    hostCtx: { get: (key) => key === "uiWorkspace" ? workspace : key === "layout" ? layout : undefined },
+    hostCtx: { get: (key) => key === "uiWorkspace" ? workspace : key === "layout" ? layout : key === "sessions" ? { list: { getSnapshot: () => ({ byId: { [state.session]: { blank: state.blank === true } } }) } } : undefined },
     shownSessionId: () => state.session,
     routeLaidOut: (node) => !node.hidden,
     visibleCollapseButton: () => state.collapse,
@@ -161,7 +161,8 @@ test("Back closes overlays, drawer and right panel before navigating", () => {
   h.state.overlays = [];
   h.doc.documentElement.setAttribute("data-rdsh-drawer", "open"); h.mobileBack();
   assert.equal(h.doc.documentElement.getAttribute("data-rdsh-drawer"), null);
-  h.state.collapse = new Node("button"); h.mobileBack();
+  h.state.collapse = new Node("button");
+  h.doc.documentElement.setAttribute("data-rdsh-rightpanel-open", ""); h.mobileBack();
   assert.equal(h.state.collapse.clicks, 1);
   assert.equal(h.state.homes, 0);
   assert.equal(h.dialog(), null);
@@ -295,4 +296,18 @@ test("iPad desktop UA and mobile platform strings select the iOS gesture", () =>
   assert.ok(h.iosBackGesture());
   h.sandbox.navigator = { userAgent: "Macintosh", platform: "iPhone", maxTouchPoints: 0 };
   assert.ok(h.iosBackGesture());
+});
+
+test("Back never opens the closed right panel whose toggle remains mounted", () => {
+  const h = harness(); h.state.collapse = new Node("button");
+  h.mobileBack();
+  assert.equal(h.state.collapse.clicks, 0);
+  assert.equal(h.state.homes, 1);
+});
+
+test("a blank session shown as Home immediately offers the exit confirmation", () => {
+  const h = harness(); h.state.blank = true;
+  h.mobileBack();
+  assert.ok(h.dialog());
+  assert.equal(h.state.homes, 0);
 });

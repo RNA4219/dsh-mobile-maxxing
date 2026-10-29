@@ -44,7 +44,7 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
   const listeners = new Map();
   const timers = new Map();
   let timer = 0;
-  const state = { session: "session-1", panel: null, overlays: [], crop: null, detail: null, collapse: null, closes: 0, homes: 0, drawer: 0, toasts: [] };
+  const state = { session: "session-1", workspace: "workspace-1", openedWorkspaces: [], panel: null, overlays: [], crop: null, detail: null, collapse: null, closes: 0, homes: 0, cleared: 0, drawer: 0, toasts: [] };
   const entries = [{ outside: true }, initialState];
   let index = 1;
   const history = {
@@ -54,9 +54,14 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
   };
   const workspace = {
     selection: { getSnapshot: () => ({ sessionId: state.session }) },
-    clearMain() { state.session = ""; state.panel = null; state.homes++; },
+    clearMain() { state.session = ""; state.workspace = ""; state.panel = null; state.homes++; state.cleared++; },
+    async openWorkspace(id) {
+      state.openedWorkspaces.push(id); state.workspace = id;
+      state.session = "blank-" + id; state.blank = true; state.panel = null; state.homes++;
+    },
   };
-  const layout = { panelInfo: { getSnapshot: () => ({ activePanelId: state.panel }) } };
+  const layout = { panelInfo: { getSnapshot: () => ({ activePanelId: state.panel }) }, selectPanel(id) { state.panel = id; state.homes++; } };
+  const workspaces = { list: { getSnapshot: () => ({ items: state.workspace ? [{ workspaceId: state.workspace, sessionIds: [state.session] }] : [] }) } };
   const doc = {
     documentElement: root, body, activeElement: new Node("input"),
     createElement: (tag) => new Node(tag),
@@ -69,7 +74,7 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
     document: doc, Element: Node,
     navigator: { userAgent: ios ? "iPhone" : "Android", platform: ios ? "iPhone" : "Linux", maxTouchPoints: 5 },
     phone: () => mobile,
-    hostCtx: { get: (key) => key === "uiWorkspace" ? workspace : key === "layout" ? layout : key === "sessions" ? { list: { getSnapshot: () => ({ byId: { [state.session]: { blank: state.blank === true } } }) } } : undefined },
+    hostCtx: { get: (key) => key === "workspaces" ? workspaces : key === "uiWorkspace" ? workspace : key === "layout" ? layout : key === "sessions" ? { list: { getSnapshot: () => ({ byId: { [state.session]: { blank: state.blank === true } } }) } } : undefined },
     shownSessionId: () => state.session,
     routeLaidOut: (node) => !node.hidden,
     visibleCollapseButton: () => state.collapse,
@@ -310,4 +315,72 @@ test("a blank session shown as Home immediately offers the exit confirmation", (
   h.mobileBack();
   assert.ok(h.dialog());
   assert.equal(h.state.homes, 0);
+});
+
+test("Android Back inherits the current Workspace rather than clearing its selection", () => {
+  const h = harness(); h.state.workspace = "source-workspace";
+  const calls = [];
+  const open = h.workspace.openWorkspace;
+  h.workspace.openWorkspace = (...args) => { calls.push(args); return open(...args); };
+  h.installMobileBack(); h.pop();
+  assert.deepEqual(calls, [["source-workspace"]], "use the normal reuse flow without resetting its draft");
+  assert.equal(h.state.workspace, "source-workspace");
+  assert.equal(h.state.session, "blank-source-workspace");
+  assert.equal(h.state.cleared, 0);
+  h.pop(); assert.ok(h.dialog(), "the inherited blank is Home on the next Back");
+});
+
+test("iOS swipe inherits the current Workspace and the next swipe confirms exit", () => {
+  const h = harness({ ios: true }); h.state.workspace = "ios-workspace";
+  swipe(h);
+  assert.equal(h.state.workspace, "ios-workspace");
+  assert.deepEqual(h.state.openedWorkspaces, ["ios-workspace"]);
+  assert.equal(h.state.cleared, 0);
+  swipe(h); assert.ok(h.dialog());
+});
+
+test("leaving a global panel preserves a blank Home and its draft session", () => {
+  const h = harness(); h.state.blank = true; h.state.panel = "plugins";
+  const session = h.state.session;
+  h.mobileBack();
+  assert.equal(h.state.session, session);
+  assert.equal(h.state.workspace, "workspace-1");
+  assert.equal(h.state.panel, null);
+  assert.equal(h.state.cleared, 0);
+  assert.deepEqual(h.state.openedWorkspaces, []);
+  assert.equal(h.dialog(), null);
+});
+
+test("leaving a global panel above a conversation opens Home in that Workspace", () => {
+  const h = harness(); h.state.panel = "tasks";
+  h.mobileBack();
+  assert.equal(h.state.workspace, "workspace-1");
+  assert.equal(h.state.session, "blank-workspace-1");
+  assert.equal(h.state.panel, null);
+  assert.equal(h.state.cleared, 0);
+});
+
+test("failed Workspace connection keeps the conversation and does not confirm exit", async () => {
+  const h = harness();
+  h.workspace.openWorkspace = async () => { throw new Error("host refused"); };
+  h.mobileBack(); await Promise.resolve();
+  assert.equal(h.state.session, "session-1");
+  assert.equal(h.state.workspace, "workspace-1");
+  assert.equal(h.state.cleared, 0);
+  assert.equal(h.dialog(), null);
+});
+
+test("an unavailable Workspace navigation API does not discard its selection", () => {
+  const h = harness(); delete h.workspace.openWorkspace;
+  h.mobileBack();
+  assert.equal(h.state.session, "session-1");
+  assert.equal(h.state.cleared, 0);
+  assert.equal(h.state.toasts.length, 1);
+});
+
+test("sessions without a Workspace still return to Home", () => {
+  const h = harness(); h.state.workspace = "";
+  h.mobileBack();
+  assert.equal(h.state.session, "");
+  assert.equal(h.state.cleared, 1);
 });

@@ -480,10 +480,18 @@ test("the shipped plugin installs Back at boot and tears it down with the module
 		replaceState(value) { entries[index] = value; },
 		pushState(value) { entries.splice(++index); entries[index] = value; },
 	};
-	const workspace = { selection: { getSnapshot: () => ({ sessionId: "existing-session" }) }, clearMain() { homes++; } };
+	const workspace = {
+		selection: { getSnapshot: () => ({ sessionId: "existing-session" }) },
+		async openWorkspace(id) { assert.equal(id, "existing-workspace"); homes++; },
+		clearMain() { assert.fail("Back must preserve the selected Workspace"); },
+	};
 	const booted = bootClient({
 		mode: "mobile", narrow: true, globals: { history },
-		services: { uiWorkspace: workspace, layout: { panelInfo: { getSnapshot: () => ({ activePanelId: null }) } } },
+		services: {
+			uiWorkspace: workspace,
+			workspaces: { list: { getSnapshot: () => ({ items: [{ workspaceId: "existing-workspace", sessionIds: ["existing-session"] }] }) } },
+			layout: { panelInfo: { getSnapshot: () => ({ activePanelId: null }) } },
+		},
 		navigator: { userAgent: "Android", userActivation: { hasBeenActive: true } },
 		windowAdd: (type, handler) => handlers.set(type, handler),
 		windowRemove: (type, handler) => { if (handlers.get(type) === handler) handlers.delete(type); },

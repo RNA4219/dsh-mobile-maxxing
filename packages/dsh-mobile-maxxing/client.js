@@ -9893,7 +9893,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const blank = optionalService("sessions")?.list?.getSnapshot?.()?.byId?.[sessionId]?.blank === true;
       const panelId = layout?.panelInfo?.getSnapshot?.()?.activePanelId;
       if ((sessionId && !blank) || panelId != null) {
-        if (typeof workspace?.clearMain === "function") {
+        const workspaceId = optionalService("workspaces")?.list?.getSnapshot?.()?.items
+          ?.find((item) => item.sessionIds?.includes(sessionId))?.workspaceId;
+        if (sessionId && !blank && workspaceId != null) {
+          if (typeof workspace?.openWorkspace !== "function") {
+            mobileToast(t("mux.back.unavailable"));
+            return;
+          }
+          wantedSession = "";
+          wantedUntil = 0;
+          // The normal Workspace flow reuses its blank session, preserving
+          // the directory and any existing draft without clearing the source.
+          // Its service reports creation failures and keeps the old selection.
+          void Promise.resolve(workspace.openWorkspace(workspaceId)).catch(() => {});
+        } else if (panelId != null && (!sessionId || blank) && typeof layout?.selectPanel === "function") {
+          wantedSession = "";
+          wantedUntil = 0;
+          layout.selectPanel(null);
+        } else if (typeof workspace?.clearMain === "function") {
           wantedSession = "";
           wantedUntil = 0;
           workspace.clearMain();

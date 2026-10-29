@@ -5604,7 +5604,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * @returns {{container: Element, source: Element|null, back: boolean}|null}
      */
-    function routeDetailOf() {
+    function routeDetailOf(includeSplit = false) {
       for (const container of document.querySelectorAll("[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]")) {
         if (routeLaidOut(container)) return { container, source: routeCrumbOf(container), back: false };
       }
@@ -5620,7 +5620,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       while (pane.parentElement !== null && pane.parentElement !== page) pane = pane.parentElement;
       const others = [...page.children].filter((child) => child !== pane);
       const listGone = others.length === 0 || others.some((child) => !routeLaidOut(child));
-      return listGone ? { container: page, source: close, back: true } : null;
+      return listGone || includeSplit ? { container: page, source: close, back: true } : null;
     }
 
     /**
@@ -9865,7 +9865,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (overlay !== undefined) {
         const close = overlay.querySelector("[data-rdsh-settings-close]");
         if (close !== null) close.click();
-        else (document.activeElement ?? overlay).dispatchEvent(new KeyboardEvent("keydown", {
+        else (overlay.contains(document.activeElement) ? document.activeElement : overlay).dispatchEvent(new KeyboardEvent("keydown", {
           key: "Escape", code: "Escape", bubbles: true, cancelable: true,
         }));
         return;
@@ -9879,7 +9879,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         collapse.click();
         return;
       }
-      const detail = routeDetailOf();
+      const detail = routeDetailOf(true);
       if (detail !== null) {
         // The plugin detail's first breadcrumb returns to its parent. This
         // preserves the package -> plugin -> list hierarchy and translated UI.
@@ -9887,8 +9887,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (back !== null) back.click();
         return;
       }
-      const workspace = hostCtx?.get?.("uiWorkspace");
-      const layout = hostCtx?.get?.("layout");
+      const workspace = optionalService("uiWorkspace");
+      const layout = optionalService("layout");
       const sessionId = workspace?.selection?.getSnapshot?.()?.sessionId ?? shownSessionId();
       const panelId = layout?.panelInfo?.getSnapshot?.()?.activePanelId;
       if (sessionId || panelId != null) {
@@ -9910,23 +9910,41 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const history = window.history;
       if (!phone() || typeof history?.pushState !== "function") return () => {};
       const withMarker = (level) => ({ ...history.state, [BACK_STATE]: level });
-      const guard = () => history.pushState(withMarker("guard"), "");
-      if (history.state?.[BACK_STATE] !== "guard") {
-        history.replaceState(withMarker("base"), "");
-        guard();
-      }
+      const supportedState = () => history.state == null
+        || (typeof history.state === "object" && !Array.isArray(history.state));
+      const guard = () => {
+        if (!supportedState()) return false;
+        try { history.pushState(withMarker("guard"), ""); return true; }
+        catch { return false; }
+      };
+      const arm = () => {
+        if (history.state?.[BACK_STATE] === "guard" || !supportedState()) return;
+        // Chrome may skip entries inserted before the user interacts. Wait
+        // for a trusted interaction when the activation API is available.
+        if (navigator.userActivation?.hasBeenActive === false) return;
+        try { history.replaceState(withMarker("base"), ""); guard(); }
+        catch { /* A denied History API must not break the mobile UI. */ }
+      };
+      const onInteraction = (event) => { if (event.isTrusted) arm(); };
       const onBack = (event) => {
         if (event.state?.[BACK_STATE] !== "base") return;
-        guard();
+        if (!guard()) return;
         // Safari may report native history navigation for the same edge
         // gesture. Whichever arrives first owns it; never go back twice.
         edgeSwipe = null;
         if (iosBackGesture() && Date.now() - lastBackSwipe < 600) return;
         mobileBack();
       };
+      arm();
       window.addEventListener("popstate", onBack);
+      document.addEventListener("pointerdown", onInteraction, true);
+      document.addEventListener("pointerup", onInteraction, true);
+      document.addEventListener("keydown", onInteraction, true);
       return () => {
         window.removeEventListener("popstate", onBack);
+        document.removeEventListener("pointerdown", onInteraction, true);
+        document.removeEventListener("pointerup", onInteraction, true);
+        document.removeEventListener("keydown", onInteraction, true);
         closeExitDialog();
         // Retain the marker so a hot reload reuses this guard, not another one.
       };
@@ -9942,6 +9960,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone() || event.touches.length !== 1) return;
       const first = event.touches[0];
       if (iosBackGesture() && first.clientX <= 36) {
+        lastBackSwipe = -Infinity;
         if (event.target instanceof Element) {
           if (event.target.closest('input, textarea, [contenteditable=true], .xterm, [data-dockkit-strip], [data-dockkit-tab]') !== null) return;
           if (scrolledLeftAncestor(event.target) !== null) return;

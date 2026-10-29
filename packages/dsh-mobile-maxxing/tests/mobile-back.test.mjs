@@ -8,6 +8,8 @@ const source = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 const start = source.indexOf("    // Mobile back navigation (#125).");
 const end = source.indexOf("    // Input: Enter inserts", start);
 assert.ok(start > 0 && end > start);
+const optionalStart = source.indexOf("    function optionalService(");
+const optionalEnd = source.indexOf("\n    }", optionalStart) + 6;
 
 class Node {
   constructor(tag = "div") {
@@ -33,6 +35,7 @@ class Node {
   hasAttribute(key) { return this.attributes.has(key); }
   querySelector() { return this.close ?? null; }
   closest() { return this.excluded ? this : null; }
+  contains(node) { return node === this || this.children.includes(node); }
 }
 
 function harness({ ios = false, mobile = true, initialState = { upstream: "kept" } } = {}) {
@@ -59,6 +62,8 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
     createElement: (tag) => new Node(tag),
     querySelector: (selector) => selector === "[data-rdsh-crop-overlay]" ? state.crop : null,
     querySelectorAll: () => state.overlays,
+    addEventListener: (type, fn) => listeners.set(`document:${type}`, fn),
+    removeEventListener: (type, fn) => { if (listeners.get(`document:${type}`) === fn) listeners.delete(`document:${type}`); },
   };
   const sandbox = {
     document: doc, Element: Node,
@@ -89,7 +94,7 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
     },
   };
   vm.createContext(sandbox);
-  vm.runInContext(source.slice(start, end) + `
+  vm.runInContext(source.slice(optionalStart, optionalEnd) + "\n" + source.slice(start, end) + `
     globalThis.api = { mobileBack, installMobileBack, onEdgeSwipeStart, onEdgeSwipeMove, onEdgeSwipeEnd, iosBackGesture,
       dialog: () => exitDialog, pending: () => wantedSession };
   `, sandbox);
@@ -163,12 +168,61 @@ test("Back closes overlays, drawer and right panel before navigating", () => {
 });
 
 test("a generic dialog receives Escape and does not navigate underneath", () => {
-  const h = harness(); h.state.overlays = [new Node()];
+  const h = harness(); const overlay = new Node(); h.state.overlays = [overlay];
   let escape;
-  h.doc.activeElement.addEventListener("keydown", (event) => { escape = event; });
+  overlay.addEventListener("keydown", (event) => { escape = event; });
   h.mobileBack();
   assert.equal(escape.key, "Escape"); assert.ok(escape.bubbles);
   assert.equal(h.state.homes, 0);
+});
+
+test("history arms after a trusted interaction on a cold start", () => {
+  const h = harness(); h.sandbox.navigator.userActivation = { hasBeenActive: false };
+  h.installMobileBack();
+  assert.equal(h.entries.length, 2);
+  h.listeners.get("document:pointerdown")({ isTrusted: false });
+  assert.equal(h.entries.length, 2);
+  h.sandbox.navigator.userActivation.hasBeenActive = true;
+  h.listeners.get("document:pointerup")({ isTrusted: true });
+  assert.equal(h.entries.length, 3);
+  h.pop(); assert.equal(h.state.homes, 1);
+});
+
+test("unrelated primitive/array history state and a denied History API are preserved", () => {
+  for (const initialState of ["upstream", 1, ["upstream"]]) {
+    const h = harness({ initialState }); h.installMobileBack();
+    assert.equal(h.entries.length, 2);
+    assert.equal(h.sandbox.window.history.state, initialState);
+  }
+  const h = harness(); h.sandbox.window.history.pushState = () => { throw new Error("SecurityError"); };
+  assert.doesNotThrow(() => h.installMobileBack());
+});
+
+test("missing optional services do not throw or offer exit on a loading screen", () => {
+  const h = harness(); h.state.session = "";
+  h.sandbox.hostCtx.get = () => { throw new Error("service not ready"); };
+  assert.doesNotThrow(() => h.mobileBack());
+  assert.equal(h.dialog(), null);
+});
+
+test("a second iOS native swipe inside the deduplication window is a separate Back", () => {
+  const h = harness({ ios: true }); h.installMobileBack(); swipe(h); h.pop();
+  const target = new Node(); h.onEdgeSwipeStart(touch(target, 8, 100));
+  h.pop();
+  assert.ok(h.dialog());
+});
+
+test("task detail in a wide split returns to its list before Home", () => {
+  const h = harness(); const page = new Node(); const pane = new Node(); const list = new Node(); const close = new Node("button");
+  close.parentElement = pane; pane.parentElement = page; page.children = [list, pane];
+  page.querySelectorAll = () => [close]; close.setAttribute("aria-label", "Close details");
+  h.doc.querySelector = () => page; h.doc.querySelectorAll = () => [];
+  h.sandbox.probeValues = () => ["Close details"];
+  const routeStart = source.indexOf("    function routeDetailOf(");
+  const routeEnd = source.indexOf("\n    }", routeStart) + 6;
+  const route = vm.runInContext(source.slice(routeStart, routeEnd) + "\nrouteDetailOf", h.sandbox);
+  assert.equal(route(), null, "the layout helper still leaves the list visible");
+  assert.equal(route(true).source, close, "Back closes the detail even when its list is visible");
 });
 
 test("detail returns to its parent before the full-screen panel returns Home", () => {
